@@ -1,32 +1,28 @@
 #!/usr/bin/env python
 # coding=utf-8
 from __future__ import absolute_import
-import scrapy
-import requests
+
 import json
-import time
-import random
-import tld
-from videowebset.items import VideowebsetItem
-from videowebset.settings import DATABASE
-from tld import get_tld
-import tldextract
-import psycopg2
 import re
+import time
+
+import psycopg2
+import scrapy
+import tldextract
+
+from videowebset.settings import DATABASE
+
+
 class VideowebsetSpider(scrapy.Spider):
-    name = 'videowebset'
-    def __init__(self):
-        self.db = psycopg2.connect(database=DATABASE['database'], user=DATABASE['user'], password=DATABASE['password'], host=DATABASE['ip'], port=DATABASE['port'])       
-        self.cur = self.db.cursor()
-        # self.patch_url = 'http://192.168.1.200:23683/videometa/spider'  #提交数据地址
-        # self.get_url = 'http://192.168.1.200:23683/videometa'
-        self.type_dict = {u"电影":1,u"电视剧":2,u'剧集':2}    #获取URL地址
-        self.headers = {'Content-Type':'application/json','Accept':'application/json'}
-        self.keylist = []
+    name = "videowebset"
+    db = psycopg2.connect(database=DATABASE['database'], user=DATABASE['user'], password=DATABASE['password'], host=DATABASE['ip'], port=DATABASE['port'])
+    cur = db.cursor()
+    type_dict = {u"电影":1,u"电视剧":2,u'剧集':2}    #获取URL地址
+    keylist = []
 
     def start_requests(self):
-        url_funcs  = {
-			"iqiyi.com":self.parse_iqiyi,
+        url_funcs = {
+            "iqiyi.com":self.parse_iqiyi,
             "qq.com":self.parse_tencent,
             "youku.com":self.parse_youku,
             "sohu.com":self.parse_sohu,
@@ -34,36 +30,31 @@ class VideowebsetSpider(scrapy.Spider):
             "wasu.cn":self.parse_wasu,
             "cntv.cn":self.parse_cntv,
             "cctv.com":self.parse_cntv
-		}
-        params = {'limit': '1','rowid':'0'}
-        list_len = int(params['limit'])
-        #while(list_len!=0):
-        while(True):
-            time.sleep(0.5)
-            content = requests.get(self.get_url, params)
-            #print content.content
-            if content:
-               json = content.json()
-               msg = json["msg"]
-               maxrowid = json["data"]["maxrowid"]
-               #print "=================>maxrowid",maxrowid
-               params["rowid"] = maxrowid
-               urllistdict = json["data"]["list"]
-               list_len = len(urllistdict)
-               if list_len!=0:
-                   for dic in urllistdict:
-                       url1 = dic["url1"]
-                       if url1!=None and url1!="":
-                           uid = dic["uid"]
-                           meta = {"uid":uid}  
-                           #如果是别的网站URL，这里默认也是请求的，需要加过滤
-                           callback = url_funcs.get('.'.join(tldextract.extract(url1)[1:]))
-                           if callback:
-                               yield scrapy.http.Request(url=url1,callback=callback,meta = meta,dont_filter=True)
-                           else:
-                               print "start_requests unproduce webset",time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
-               else:
-                    params["rowid"] = 0
+        }
+        content = self.getDBdata()
+        if content:
+           urllistdict = content
+           for dic in urllistdict:
+               url1 = dic[1]
+               if url1!=None and url1!="":
+                   uid = dic[0]
+                   meta = {"uid":uid}
+                   #如果是别的网站URL，这里默认也是请求的，需要加过滤
+                   callback = url_funcs.get('.'.join(tldextract.extract(url1)[1:]))
+                   if callback:
+                       yield scrapy.http.Request(url=url1,callback=callback,meta = meta,dont_filter=True)
+                   else:
+                       print("start_requests unproduce webset",time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
+        else:
+            print("no url need to update")
+            # time.sleep(3)
+
+    def getDBdata(self):
+        check_sql = "select uid, url1 from tb_iprobe_data2 where sflag =0 limit 1"
+        self.cur.execute(check_sql)
+        check_data = self.cur.fetchall() #([1,2], [4,5], ...)
+        print("get data")
+        return check_data
 
     def parse_iqiyi(self,response):
          premiere = ''
@@ -93,8 +84,10 @@ class VideowebsetSpider(scrapy.Spider):
          #视频资源id
          uid = response.meta["uid"]
          self.itempreduce(uid,url,title,type1,director,premiere)
-         print "parse_iqiyi()", url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
-    def parse_tencent(self,response):
+         print("parse_iqiyi()", url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
+
+    #解析tencent
+    def parse_tencent(self, response):
         firstresponse = scrapy.Selector(response)
         uid = response.meta["uid"]
         #判断返回状态
@@ -124,7 +117,7 @@ class VideowebsetSpider(scrapy.Spider):
                 yield scrapy.http.Request(url=fullurl,callback=self.parse_tencent_second,meta = meta,dont_filter=True)
             else:
                 self.itempreduce(uid,'','',99,'','')
-                print u"tencent-else-video",time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
+                print(u"tencent-else-video",time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
                 #小视频等没有详情页面的视频资源
 
     def parse_tencent_second(self,response): #腾讯二级请求页面
@@ -135,7 +128,7 @@ class VideowebsetSpider(scrapy.Spider):
         type1list = secondresponse.xpath('//h1[@class="video_title_cn"]/span[@class="type"]/text()').extract()
         type_temp = type1list[0] if type1list else''
         type1 = self.type_dict.get(type_temp,99)
-        #影片名称 
+        #影片名称
         MovieTitlelist = secondresponse.xpath('//h1[@class="video_title_cn"]/a/text()').extract()
         title = MovieTitlelist[0] if MovieTitlelist else ''
         #上映时间
@@ -144,9 +137,10 @@ class VideowebsetSpider(scrapy.Spider):
         premiere = premierelist[0]if premierelist else ''
         director = response.meta.get("director")
         self.itempreduce(uid,url,title,type1,director,premiere)
-        print "parse_tencent_second()", url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
+        print("parse_tencent_second()", url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
 
     def parse_youku(self,response):
+        print("==================>>>>>>>>>>>>>")
         uid = response.meta["uid"]
         url = response.url
         firstresponse = scrapy.Selector(response)
@@ -162,7 +156,7 @@ class VideowebsetSpider(scrapy.Spider):
                 yield scrapy.http.Request(url=fullurl,callback=self.parse_youku_second,meta = meta,dont_filter=True)
             else:
                 self.itempreduce(response.meta["uid"],'','',99,'','')
-                print u"youku-else-video",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
+                print(u"youku-else-video",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
                 #小视频等没有详情页面的视频资源
     def parse_youku_second(self,response):
         secondresponse = scrapy.Selector(response)
@@ -178,9 +172,9 @@ class VideowebsetSpider(scrapy.Spider):
         #print type1
         if type1 ==99:
             self.itempreduce(uid,'','',type1,'','')
-            print u"youku-else-video",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
+            print(u"youku-else-video",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
         else:
-            #影片名称 
+            #影片名称
             title = response.meta["title"]
             #导演
             directorlist = secondresponse.xpath('//li[text()="%s"]/a/text()'%(u'导演：')).extract()
@@ -195,8 +189,8 @@ class VideowebsetSpider(scrapy.Spider):
             premierelist = secondresponse.xpath('//span[@class="pub"]/label[text()="%s"]/../text()'%(u'上映：')).extract()#../表示当前标签的父标签
             premiere = premierelist[0]if premierelist else ''
             self.itempreduce(uid,url,title,type1,director,premiere)
-            print u"youku-parse_youku_second()",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))            
-        
+            print(u"youku-parse_youku_second()",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
+
 
     def parse_sohu(self,response):
         url = response.url
@@ -221,7 +215,7 @@ class VideowebsetSpider(scrapy.Spider):
                 yield scrapy.http.Request(url=fullurl,callback=self.parse_sohu_second,meta = meta,dont_filter=True)
             else:
                 self.itempreduce(response.meta("uid"),'','',99,'','')
-                print u"souhu-parse_sohu()-no-deatil",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))               
+                print(u"souhu-parse_sohu()-no-deatil",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
 
         elif typefilm:#会员电影页面
             type1 = 1
@@ -232,7 +226,7 @@ class VideowebsetSpider(scrapy.Spider):
             #主演
             actor_list = firstresponse.xpath('//p[@class="film-text-ellipsis"]/text()').extract()
             #print "sohuactors",actor_list[0]
-            temp_a = re.sub("	|\n",'',actor_list[0]) if actor_list else '' 
+            temp_a = re.sub("	|\n",'',actor_list[0]) if actor_list else ''
             MovieActor = temp_a.replace(u'主演：','').split('/')
             #print MovieActor
             self.keylist.extend(MovieActor)
@@ -243,16 +237,16 @@ class VideowebsetSpider(scrapy.Spider):
             director_list = compile_director.findall(content)
             self.keylist.extend(director_list)
             self.insertkey(self.keylist)
-            director = director_list[0] if director_list else ''          
+            director = director_list[0] if director_list else ''
             #年份
             premierelist = firstresponse.xpath('//span[text()="%s"]/em/text()'%(u'年份：')).extract()
             premiere = premierelist[0] if premierelist else ''
             self.itempreduce(uid,url,title,type1,director,premiere)
-            print "souhu-vip",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
+            print("souhu-vip",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
 
-        else: #其他 
+        else: #其他
             self.itempreduce(uid,'','',99,'','')
-            print u"souhu-else-video",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
+            print(u"souhu-else-video",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
 
     # 电视剧或者非会员电影转向二级页面，js请求
     def parse_sohu_second(self,response):
@@ -273,14 +267,14 @@ class VideowebsetSpider(scrapy.Spider):
         directorlist = json.loads(directorlisttemp[0]) if directorlisttemp else []
         self.keylist.extend(directorlist)
         self.insertkey(self.keylist)
-        director = '/'.join(directorlist) 
+        director = '/'.join(directorlist)
         #发行年份
-        premierecomoile = re.compile(u'\"publishYear":(.*?),"') 
+        premierecomoile = re.compile(u'\"publishYear":(.*?),"')
         premiere = premierecomoile.findall(secondresponse)[0] if premierecomoile.findall(secondresponse)  else ''
         #发送数据
         self.itempreduce(uid,url,title,type1,director,premiere)
-        print u"souhu-dianshiju or novip-film",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
-        
+        print(u"souhu-dianshiju or novip-film",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
+
 
 
 
@@ -308,7 +302,7 @@ class VideowebsetSpider(scrapy.Spider):
         self.keylist.extend(actorslist)
         self.insertkey(self.keylist)
         self.itempreduce(uid,url,title,type1,director,premiere)
-        print "letv",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
+        print("letv",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
 
     def parse_wasu(self,response):
         meta = {}
@@ -342,7 +336,7 @@ class VideowebsetSpider(scrapy.Spider):
                 meta["title"] = title
                 premiere = ''
                 self.itempreduce(uid,url,title,type1,director,premiere)
-                print "wasutv-film",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
+                print("wasutv-film",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
             else: # 电视剧
                 titlelist = firstresponse.xpath('//div[@class="l"]//h3/a/text()').extract()
                 title = titlelist[0] if titlelist else ''
@@ -352,7 +346,7 @@ class VideowebsetSpider(scrapy.Spider):
                 yield scrapy.http.Request(url=detailurl,callback=self.parse_wasu_second,meta = meta,dont_filter=True)
         else:
             self.itempreduce(uid,url,'',type1,'','')
-            print u"wasutv-else-video"     
+            print(u"wasutv-else-video")
     def parse_wasu_second(self,response):#华数电视剧详细页面获取上映时间
         secondresponse = scrapy.Selector(response)
         #年份
@@ -360,7 +354,7 @@ class VideowebsetSpider(scrapy.Spider):
         premiere = premierelist[0] if premierelist else ''
         #发送数
         self.itempreduce(response.meta["uid"],response.meta["url"],response.meta["title"],response.meta["type1"],response.meta["director"],premiere)
-        print u"wasutv-dianshiju" 
+        print(u"wasutv-dianshiju")
     def parse_cntv(self,response):
         meta = {}
         url = response.url
@@ -386,19 +380,19 @@ class VideowebsetSpider(scrapy.Spider):
                 yield scrapy.http.Request(url=detailurl,callback=self.parse_comdetail_cntv,meta = meta,dont_filter=True)
             else:
                 self.itempreduce(uid,url,title,99,'','')#0代表未知类型
-                print "cntv no detail and patch data"
+                print("cntv no detail and patch data")
                 #发送空数据
         else:#其他地址，暂不处理
             self.itempreduce(uid,url,'',99,'','')
-            print "cntv-else-unproduce"
-            
+            print("cntv-else-unproduce")
+
     def parse_search_cntv(self,response):
         searchresponse = scrapy.Selector(response)
         meta = response.meta
         #校验一下搜索页的标题是否和播放页面一致
         search_titlelist = searchresponse.xpath('//h3[@class="tit"]/a/font/text()').extract()
         search_title = search_titlelist[0] if search_titlelist else 'null'
-        if search_title == response.meta['title']:        
+        if search_title == response.meta['title']:
             detailurllist = searchresponse.xpath('//p[@class="more"]/a/@href').extract()
             #urlcompile = re.compile('link.php?targetpage=(.*)&point')
             urlcompile = re.compile('link.php\?targetpage=(.*)&point')
@@ -406,16 +400,16 @@ class VideowebsetSpider(scrapy.Spider):
             detailurl = urllisttemp[0] if urllisttemp else''
             #判断URL类型，有三种，/dianying.cntv.cn转向电影页面,tv.cntv.com转向另一种板式，tv.cntv.cn没有详情
             if detailurl!=''and detailurl.startswith('http://tv.cctv.com'):
-                print "turn to the dianshiju"
+                print("turn to the dianshiju")
                 yield scrapy.http.Request(url=detailurl,callback=self.parse_comdetail_cntv,meta = meta,dont_filter=True)
             elif detailurl!=''and detailurl.startswith('http://dianying.cntv.cn'):#转向电影页面
-                print u"turn to the film"
+                print(u"turn to the film")
                 yield scrapy.http.Request(url=detailurl,callback=self.parse_dianyingdetail_cntv,meta = meta,dont_filter=True)
             elif detailurl!=''and detailurl.startswith('http://tv.cntv.cn/videoset'):
-                print "detail is tv.cntv.cn,no detail"# 这里转向的地址没有详情，只发送标题，其余数据为空
+                print("detail is tv.cntv.cn,no detail")# 这里转向的地址没有详情，只发送标题，其余数据为空
                 self.itempreduce(meta["uid"],meta["url"],search_title,0,'','')#0代表未知类型
             else:
-                print "cntv detail url is unknown" #没有详情URL
+                print("cntv detail url is unknown") #没有详情URL
                 self.itempreduce(meta["uid"],meta["url"],search_title,0,'','')#0代表未知类型
         else:#搜索为空
             self.itempreduce(meta["uid"],meta["url"],response.meta['title'],0,'','')
@@ -443,8 +437,8 @@ class VideowebsetSpider(scrapy.Spider):
         type1 = 2 if detailresponse.xpath('//span[text()="%s"]/../text()'%(u'集数：')).extract() else 1
         #发送数据
         self.itempreduce(uid,url,title,type1,director,premiere)
-        print u"==========>cntv film or dianshiju",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
-  
+        print(u"==========>cntv film or dianshiju",url,time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
+
     def parse_dianyingdetail_cntv(self,response):
         dianyingresponse = scrapy.Selector(response)
         lagcompile = re.compile(u'<td class="js"><a href!="">(.*?)</a><')
@@ -469,53 +463,35 @@ class VideowebsetSpider(scrapy.Spider):
 
 
 
-      
+
     def unprocess_url(self,response):
-        print "unknown"
+        print("unknown")
 
 
 
     #将演员和关键字插入库中
     def insertkey(self,insertkey):
-        times = time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
         if insertkey:
             for key in list(set(insertkey)):
-                check_sql = "select keyword from public.movie_keyword_task_bak where keyword ='%s'"%key
+                check_sql = "select keyword from public.tb_movie_keyword_task where keyword ='%s'"%key
                 self.cur.execute(check_sql)
                 check_data = self.cur.fetchall()
                 if check_data:  # 关键字存在的话就不插入
-                    print 'keyword exists' 
+                    print('keyword exists')
                 else:
-                    self.cur.execute(u"insert into public.movie_keyword_task_bak(keyword, flag, insert_times) values('{}', {}, '{}')".format(key,0,times))
-                    print 'keyword insert ok'
+                    self.cur.execute(u"insert into public.tb_movie_keyword_task(keyword, flag) values('{}', {})".format(key,0))
+                    print('keyword insert ok')
                 self.db.commit()
         else:
-            return            
+            return
 
-
-
-
-    #向接口发送patch请求
-    def patch_request(self,dict_data):
-        r = requests.patch(url=self.patch_url, headers = self.headers,data=json.dumps(dict_data))
-        print u"patch-data-over"
-
-    #组item字段
-    def itempreduce(self,uid,url,title,type1,director,premiere):
-        item= VideowebsetItem()
+    #将需要的内容更新回数据库
+    def itempreduce(self, uid, url, title, type1, director, premiere):
         times = time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
-        item["uid"] = uid
-        item["url"] = url
-        item["title"] = title
-        item["type1"] = type1
-        item["director"] = director
-        item["create_time"] = times
-        item["premiere"] = premiere
-        dict_patch = dict(item)
-        dict_data = {"list":[dict_patch]}
-        try:
-            self.patch_request(dict_data)
-        except:
-            pass
-        #if type1!='99':#存数据库的条件是电影和电视剧
-            #yield item
+
+        #更新到本地postgres
+        check_sql = "update tb_iprobe_data2 set url = '%s', title= '%s', director= '%s', premiere = '%s', type1 = '%d', sflag = 2" \
+                    " where uid = '%s' and sflag = 0"%(url, title, director, premiere, type1, uid)
+        self.cur.execute(check_sql)
+        self.db.commit()
+        print("更新数据库tb_iprobe_data2[%s]"%times)

@@ -19,8 +19,8 @@ DATABASE = {
     "ip":"192.168.1.213",
     "port":"5432",
     "user":"postgres",
-    "password":"postgres",
-    "database":"postgres",
+    "password":"123456",
+    "database":"ismartnet",
 }
 
 # Crawl responsibly by identifying yourself (and your website) on the user-agent

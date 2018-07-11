@@ -7,7 +7,7 @@ from scrapy import cmdline
 while True:
     try:
         # cmdline.execute('scrapy crawl videowebset'.split())
-        subprocess.call('scrapy crawl videowebset')
+        subprocess.call('scrapy crawl videowebset --nolog', shell=True)
     except Exception as e:
         print e
     time.sleep(5)
